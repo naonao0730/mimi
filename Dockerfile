@@ -1,12 +1,12 @@
-FROM node:20-alpine
+FROM node:20-slim
 
 WORKDIR /app
 
 # 复制 package.json
 COPY package*.json ./
 
-# 安装依赖
-RUN npm install --production
+# 安装依赖（包括 devDependencies，因为需要 tsx）
+RUN npm install
 
 # 复制源代码
 COPY . .
