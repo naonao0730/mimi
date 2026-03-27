@@ -9,6 +9,7 @@ export interface Account {
   ph_token: string;
   api_key: string;
   is_active: number;
+  banned_status: string | null;  // 'TEMPORARY' | 'PERMANENT' | null
   active_requests: number;
   created_at: string;
 }
@@ -70,6 +71,10 @@ export function deleteAccount(id: string) {
 
 export function markAccountInactive(id: string) {
   db.prepare('UPDATE accounts SET is_active = 0 WHERE id = ?').run(id);
+}
+
+export function markAccountBanned(id: string, banType: 'TEMPORARY' | 'PERMANENT') {
+  db.prepare('UPDATE accounts SET is_active = 0, banned_status = ? WHERE id = ?').run(banType, id);
 }
 
 export function parseCurl(curl: string): { service_token: string; user_id: string; ph_token: string } | null {

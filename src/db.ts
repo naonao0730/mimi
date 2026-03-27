@@ -19,6 +19,7 @@ export function initDb() {
       ph_token TEXT NOT NULL,
       api_key TEXT NOT NULL UNIQUE,
       is_active INTEGER DEFAULT 1,
+      banned_status TEXT DEFAULT NULL,
       active_requests INTEGER DEFAULT 0,
       created_at TEXT
     );
@@ -52,4 +53,11 @@ export function initDb() {
       created_at TEXT
     );
   `);
+
+  // 迁移：为旧表添加 banned_status 字段
+  try {
+    db.exec('ALTER TABLE accounts ADD COLUMN banned_status TEXT DEFAULT NULL');
+  } catch {
+    // 字段已存在，忽略错误
+  }
 }

@@ -9,25 +9,71 @@ export interface MimoUsage {
 }
 
 export interface MimoChunk {
-  type: 'text' | 'usage' | 'dialogId' | 'finish';
+  type: 'text' | 'usage' | 'dialogId' | 'finish' | 'error';
   content?: string;
   usage?: MimoUsage;
 }
 
+export interface MimoChatOptions {
+  temperature?: number;
+  topP?: number;
+  systemPrompt?: string;
+  webSearchMode?: 'disabled' | 'auto' | 'enabled';
+  enableThinking?: boolean;
+  model?: string;
+}
+
+export interface MimoError {
+  status: number;
+  type: 'auth' | 'banned_temporary' | 'banned_permanent' | 'rate_limit' | 'server_error' | 'unknown';
+  message: string;
+}
+
 const API_URL = 'https://aistudio.xiaomimimo.com/open-apis/bot/chat';
+
+export function parseMimoError(status: number): MimoError {
+  switch (status) {
+    case 401:
+    case 403:
+      return { status, type: 'auth', message: '登录已过期，请重新登录' };
+    case 451:
+      return { status, type: 'banned_temporary', message: '账号已被临时封禁' };
+    case 461:
+      return { status, type: 'banned_permanent', message: '账号已被永久封禁' };
+    case 429:
+      return { status, type: 'rate_limit', message: '请求过于频繁，请稍后重试' };
+    case 503:
+      return { status, type: 'server_error', message: '服务暂时不可用，请稍后重试' };
+    default:
+      return { status, type: 'unknown', message: `MiMo API 错误: ${status}` };
+  }
+}
 
 export async function* callMimo(
   account: Account,
   conversationId: string,
   query: string,
-  enableThinking: boolean,
-  model = 'mimo-v2-pro'
+  options: MimoChatOptions = {}
 ): AsyncGenerator<MimoChunk> {
+  const {
+    temperature = 0.8,
+    topP = 0.95,
+    systemPrompt = '',
+    webSearchMode = 'disabled',
+    enableThinking = false,
+    model = 'mimo-v2-pro'
+  } = options;
+
   const body = {
     msgId: uuidv4().replace(/-/g, '').slice(0, 32),
     conversationId,
     query,
-    modelConfig: { enableThinking, webSearchStatus: 'disabled', model },
+    model: model,
+    temperature,
+    topP,
+    systemPrompt,
+    webSearchMode,
+    enableThinking,
     multiMedias: [],
   };
 
@@ -36,6 +82,7 @@ export async function* callMimo(
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      'Accept-Language': 'zh-CN',
       'Cookie': `serviceToken=${account.service_token}; userId=${account.user_id}; xiaomichatbot_ph=${account.ph_token}`,
       'Origin': 'https://aistudio.xiaomimimo.com',
       'Referer': 'https://aistudio.xiaomimimo.com/',
@@ -45,7 +92,11 @@ export async function* callMimo(
     body: JSON.stringify(body),
   });
 
-  if (!resp.ok) throw new Error(`MiMo error: ${resp.status}`);
+  if (!resp.ok) {
+    const error = parseMimoError(resp.status);
+    yield { type: 'error', content: JSON.stringify(error) };
+    return;
+  }
   if (!resp.body) throw new Error('No response body');
 
   const reader = resp.body.getReader();

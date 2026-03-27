@@ -1,8 +1,8 @@
 import { Hono } from 'hono';
 import { stream } from 'hono/streaming';
 import { v4 as uuidv4 } from 'uuid';
-import { getAccountByApiKey, getLeastBusyAccount, incrementActive, decrementActive, markAccountInactive } from '../accounts.js';
-import { callMimo, MimoUsage } from '../mimo/client.js';
+import { getAccountByApiKey, getLeastBusyAccount, incrementActive, decrementActive, markAccountInactive, markAccountBanned } from '../accounts.js';
+import { callMimo, MimoUsage, MimoError, parseMimoError } from '../mimo/client.js';
 import { getOrCreateSession, updateSessionTokens } from '../mimo/session.js';
 import { serializeMessages, extractLastUserMessage, ChatMessage } from '../mimo/serialize.js';
 import { config } from '../config.js';
@@ -15,11 +15,21 @@ const MODEL_MAP: Record<string, string> = {
   'gpt-4o': 'mimo-v2-pro',
   'gpt-4': 'mimo-v2-pro',
   'gpt-4-turbo': 'mimo-v2-pro',
-  'gpt-3.5-turbo': 'mimo-v2-pro',
+  'gpt-3.5-turbo': 'mimo-v2-flash-studio',
   'claude-3-5-sonnet': 'mimo-v2-pro',
   'claude-3-opus': 'mimo-v2-pro',
   'mimo-v2-pro': 'mimo-v2-pro',
   'mimo-v2-flash-studio': 'mimo-v2-flash-studio',
+  'mimo-v2-omni': 'mimo-v2-omni',
+  'gpt-4o-mini': 'mimo-v2-flash-studio',
+  'gpt-4-vision-preview': 'mimo-v2-omni',
+  'claude-3-5-sonnet-20241022': 'mimo-v2-pro',
+};
+
+const MODEL_INFO: Record<string, { isOmni: boolean; defaultTemp: number; maxTokens: number }> = {
+  'mimo-v2-pro': { isOmni: false, defaultTemp: 0.8, maxTokens: 100000 },
+  'mimo-v2-flash-studio': { isOmni: false, defaultTemp: 0.8, maxTokens: 100000 },
+  'mimo-v2-omni': { isOmni: true, defaultTemp: 0.8, maxTokens: 100000 },
 };
 
 function resolveModel(model: string): string {
@@ -86,8 +96,19 @@ export function registerOpenAI(app: Hono) {
     const rawMessages: ChatMessage[] = body.messages ?? [];
     const tools: ToolDefinition[] | undefined = body.tools?.length ? body.tools : undefined;
     const isStream: boolean = body.stream ?? false;
-    const enableThinking: boolean = !!body.reasoning_effort;
     const mimoModel = resolveModel(body.model ?? '');
+    const modelInfo = MODEL_INFO[mimoModel] ?? MODEL_INFO['mimo-v2-pro'];
+
+    // 提取用户请求参数
+    const temperature = body.temperature ?? modelInfo.defaultTemp;
+    const topP = body.top_p ?? 0.95;
+    const enableThinking = !!body.reasoning_effort;
+    const webSearchMode: 'disabled' | 'auto' | 'enabled' = body.web_search ?? 'disabled';
+
+    // 提取系统提示词
+    const systemMessage = rawMessages.find(m => m.role === 'system');
+    const systemPrompt = systemMessage?.content ?? '';
+
     const startTime = Date.now();
 
     // inject tool definitions into system prompt
@@ -120,7 +141,14 @@ export function registerOpenAI(app: Hono) {
         query = serializeMessages(messages);
       }
 
-      const gen = callMimo(account, conversationId, query, enableThinking, mimoModel);
+      const gen = callMimo(account, conversationId, query, {
+        temperature,
+        topP,
+        systemPrompt,
+        webSearchMode,
+        enableThinking,
+        model: mimoModel
+      });
       const responseId = `chatcmpl-${uuidv4().replace(/-/g, '')}`;
       const created = Math.floor(Date.now() / 1000);
 
@@ -138,6 +166,19 @@ export function registerOpenAI(app: Hono) {
           let toolCallBuf: string | null = null;
           let pendingText = '';
           for await (const chunk of gen) {
+            if (chunk.type === 'error') {
+              const error = JSON.parse(chunk.content ?? '{}') as MimoError;
+              // 根据错误类型处理账号状态
+              if (error.type === 'auth') {
+                markAccountInactive(account.id);
+              } else if (error.type === 'banned_temporary' || error.type === 'banned_permanent') {
+                markAccountBanned(account.id, error.type === 'banned_permanent' ? 'PERMANENT' : 'TEMPORARY');
+              }
+              logRequest({ account_id: account.id, session_id: sessionId, model: mimoModel, usage: null, status: 'error', error: error.message, duration_ms: Date.now() - startTime });
+              await s.write(`data: ${JSON.stringify({ error: { message: error.message, type: error.type } })}\n\n`);
+              await s.write('data: [DONE]\n\n');
+              return;
+            }
             if (chunk.type === 'text') {
               let text = (chunk.content ?? '').replace(/\u0000/g, '');
               if (!pastThink && !thinkingStarted && text && !text.includes('<think>')) pastThink = true;
@@ -241,10 +282,30 @@ export function registerOpenAI(app: Hono) {
 
       // non-stream
       let fullText = '';
+      let mimoError: MimoError | null = null;
       for await (const chunk of gen) {
+        if (chunk.type === 'error') {
+          mimoError = JSON.parse(chunk.content ?? '{}') as MimoError;
+          break;
+        }
         if (chunk.type === 'text') fullText += chunk.content ?? '';
         else if (chunk.type === 'usage') lastUsage = chunk.usage!;
       }
+
+      // 处理错误
+      if (mimoError) {
+        if (mimoError.type === 'auth') {
+          markAccountInactive(account.id);
+        } else if (mimoError.type === 'banned_temporary' || mimoError.type === 'banned_permanent') {
+          markAccountBanned(account.id, mimoError.type === 'banned_permanent' ? 'PERMANENT' : 'TEMPORARY');
+        }
+        logRequest({ account_id: account.id, session_id: sessionId, model: mimoModel, usage: null, status: 'error', error: mimoError.message, duration_ms: Date.now() - startTime });
+        const httpStatus = mimoError.type === 'auth' ? 401 : 
+                          mimoError.type.includes('banned') ? 403 : 
+                          mimoError.type === 'rate_limit' ? 429 : 502;
+        return c.json({ error: { message: mimoError.message, type: mimoError.type } }, httpStatus);
+      }
+
       fullText = processThinkContent(fullText, config.thinkMode);
 
       if (sessionId && lastUsage) {
