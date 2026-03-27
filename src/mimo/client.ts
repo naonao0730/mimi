@@ -64,19 +64,22 @@ export async function* callMimo(
     systemPrompt = '',
     webSearchMode = 'disabled',
     enableThinking = false,
-    model = 'mimo-v2-pro'
+    model = 'mimo-v2-flash-studio'
   } = options;
 
   const body = {
     msgId: uuidv4().replace(/-/g, '').slice(0, 32),
     conversationId,
-    content: query,
-    model,
-    temperature,
-    topP,
-    systemPrompt,
-    webSearchMode,
-    enableThinking,
+    query,
+    isEditedQuery: false,
+    modelConfig: {
+      enableThinking,
+      webSearchStatus: webSearchMode,
+      model,
+      temperature,
+      topP,
+      ...(systemPrompt ? { systemPrompt } : {}),
+    },
     multiMedias: [],
   };
 

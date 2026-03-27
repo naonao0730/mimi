@@ -12,9 +12,9 @@ import { parseToolCalls, hasToolCallMarker } from '../tools/parser.js';
 import { toOpenAIToolCalls } from '../tools/format.js';
 
 const MODEL_MAP: Record<string, string> = {
-  'gpt-4o': 'mimo-v2-pro',
-  'gpt-4': 'mimo-v2-pro',
-  'gpt-4-turbo': 'mimo-v2-pro',
+  'gpt-4o': 'mimo-v2-flash-studio',
+  'gpt-4': 'mimo-v2-flash-studio',
+  'gpt-4-turbo': 'mimo-v2-flash-studio',
   'gpt-3.5-turbo': 'mimo-v2-flash-studio',
   'claude-3-5-sonnet': 'mimo-v2-pro',
   'claude-3-opus': 'mimo-v2-pro',
@@ -33,7 +33,7 @@ const MODEL_INFO: Record<string, { isOmni: boolean; defaultTemp: number; maxToke
 };
 
 function resolveModel(model: string): string {
-  return MODEL_MAP[model] ?? 'mimo-v2-pro';
+  return MODEL_MAP[model] ?? 'mimo-v2-flash-studio';
 }
 
 function stripThink(text: string): string {
