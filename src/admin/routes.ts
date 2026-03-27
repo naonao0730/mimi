@@ -77,9 +77,12 @@ export function registerAdmin(app: Hono) {
     try {
       const convId = uuidv4().replace(/-/g, '');
       let reply = '';
-      for await (const chunk of callMimo(account, convId, 'hi', false)) {
+      let error: string | null = null;
+      for await (const chunk of callMimo(account, convId, 'hi', { enableThinking: false })) {
         if (chunk.type === 'text') reply += chunk.content ?? '';
+        if (chunk.type === 'error') error = chunk.content ?? '未知错误';
       }
+      if (error) return c.json({ success: false, error });
       return c.json({ success: true, response: reply.slice(0, 200) });
     } catch (e) {
       return c.json({ success: false, error: String(e) });

@@ -25,27 +25,30 @@ export interface MimoChatOptions {
 
 export interface MimoError {
   status: number;
-  type: 'auth' | 'banned_temporary' | 'banned_permanent' | 'rate_limit' | 'server_error' | 'unknown';
+  type: 'auth' | 'banned_temporary' | 'banned_permanent' | 'rate_limit' | 'server_error' | 'bad_request' | 'unknown';
   message: string;
+  detail?: string;
 }
 
 const API_URL = 'https://aistudio.xiaomimimo.com/open-apis/bot/chat';
 
-export function parseMimoError(status: number): MimoError {
+export function parseMimoError(status: number, detail?: string): MimoError {
   switch (status) {
+    case 400:
+      return { status, type: 'bad_request', message: 'MiMo 请求参数错误', detail };
     case 401:
     case 403:
-      return { status, type: 'auth', message: '登录已过期，请重新登录' };
+      return { status, type: 'auth', message: '登录已过期，请重新登录', detail };
     case 451:
-      return { status, type: 'banned_temporary', message: '账号已被临时封禁' };
+      return { status, type: 'banned_temporary', message: '账号已被临时封禁', detail };
     case 461:
-      return { status, type: 'banned_permanent', message: '账号已被永久封禁' };
+      return { status, type: 'banned_permanent', message: '账号已被永久封禁', detail };
     case 429:
-      return { status, type: 'rate_limit', message: '请求过于频繁，请稍后重试' };
+      return { status, type: 'rate_limit', message: '请求过于频繁，请稍后重试', detail };
     case 503:
-      return { status, type: 'server_error', message: '服务暂时不可用，请稍后重试' };
+      return { status, type: 'server_error', message: '服务暂时不可用，请稍后重试', detail };
     default:
-      return { status, type: 'unknown', message: `MiMo API 错误: ${status}` };
+      return { status, type: 'unknown', message: `MiMo API 错误: ${status}`, detail };
   }
 }
 
@@ -67,8 +70,8 @@ export async function* callMimo(
   const body = {
     msgId: uuidv4().replace(/-/g, '').slice(0, 32),
     conversationId,
-    query,
-    model: model,
+    content: query,
+    model,
     temperature,
     topP,
     systemPrompt,
@@ -93,7 +96,8 @@ export async function* callMimo(
   });
 
   if (!resp.ok) {
-    const error = parseMimoError(resp.status);
+    const detail = await resp.text().catch(() => '');
+    const error = parseMimoError(resp.status, detail);
     yield { type: 'error', content: JSON.stringify(error) };
     return;
   }
